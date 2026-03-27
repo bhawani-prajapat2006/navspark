@@ -1,16 +1,17 @@
 """
 Main extraction pipeline orchestrating the full document processing flow.
 
-Ties together: PDF parsing → LLM extraction → schema validation → audit logging.
-Processes paired NA Order and Lease Deed documents, producing consolidated rows.
+Ties together: PDF → LLM multimodal extraction → schema validation → audit logging.
+Sends PDF files directly to Gemini's vision API for reading scanned
+and CID-encoded documents that pdfplumber cannot extract text from.
 """
 
+import time
 import logging
 from pathlib import Path
 from typing import Optional
 
 from compliance_clerk.parsers.pdf_extractor import (
-    extract_text_from_pdf,
     get_paired_documents,
     extract_lease_deed_number,
 )
@@ -40,11 +41,10 @@ class ExtractionPipeline:
     Flow:
         1. Scan input directory for PDFs
         2. Classify and pair documents (NA Order ↔ Lease Deed)
-        3. Extract text from each PDF via pdfplumber
-        4. Send text to LLM with appropriate prompts
-        5. Validate LLM response against Pydantic schemas
-        6. Log everything to the audit trail
-        7. Return consolidated rows for report generation
+        3. Send PDF files directly to Gemini multimodal API
+        4. Validate LLM response against Pydantic schemas
+        5. Log everything to the audit trail
+        6. Return consolidated rows for report generation
     """
 
     def __init__(
@@ -53,14 +53,6 @@ class ExtractionPipeline:
         llm_client: Optional[LLMClient] = None,
         audit_logger: Optional[AuditLogger] = None,
     ):
-        """
-        Initialize the extraction pipeline.
-
-        Args:
-            input_dir: Directory containing PDF files.
-            llm_client: Pre-configured LLM client (created if not provided).
-            audit_logger: Pre-configured audit logger (created if not provided).
-        """
         self.input_dir = Path(input_dir or INPUT_DIR)
         self.llm_client = llm_client or LLMClient()
         self.audit_logger = audit_logger or AuditLogger()
@@ -69,15 +61,18 @@ class ExtractionPipeline:
 
     def _extract_with_retry(
         self,
-        text: str,
+        pdf_path: str,
         doc_type: str,
         doc_name: str,
     ) -> Optional[dict]:
         """
-        Extract data from document text using LLM with retry on validation failure.
+        Extract data from a PDF using LLM multimodal API with retry on validation failure.
+
+        Sends the actual PDF file to Gemini's vision API instead of extracting
+        text first. This handles scanned PDFs and CID-encoded fonts.
 
         Args:
-            text: Extracted PDF text.
+            pdf_path: Path to the PDF file.
             doc_type: Document type ('na_order', 'lease_deed', 'echallan').
             doc_name: Filename for logging.
 
@@ -91,13 +86,17 @@ class ExtractionPipeline:
             logger.error(f"Unknown document type: {doc_type}")
             return None
 
-        prompt = prompt_builder(text)
+        # Build prompt with empty text (the PDF itself provides the content)
+        prompt = prompt_builder("")
         last_error = None
 
         for attempt in range(1, LLM_MAX_RETRIES + 1):
             try:
-                # Call LLM
-                raw_response = self.llm_client.generate(prompt)
+                # Send PDF directly to multimodal API (or text-only for demo mode)
+                if hasattr(self.llm_client, 'generate_with_pdf'):
+                    raw_response = self.llm_client.generate_with_pdf(prompt, pdf_path)
+                else:
+                    raw_response = self.llm_client.generate(prompt)
 
                 # Validate response
                 validated = enforce_schema(raw_response, model_class)
@@ -106,7 +105,7 @@ class ExtractionPipeline:
                 self.audit_logger.log_extraction(
                     document_name=doc_name,
                     document_type=doc_type,
-                    prompt=prompt,
+                    prompt=prompt[:500],
                     raw_response=raw_response,
                     parsed_json=validated.model_dump(),
                     status="success",
@@ -122,11 +121,10 @@ class ExtractionPipeline:
                     f"Validation failed for {doc_name} (attempt {attempt}): {e}"
                 )
 
-                # Log the failed attempt
                 self.audit_logger.log_extraction(
                     document_name=doc_name,
                     document_type=doc_type,
-                    prompt=prompt,
+                    prompt=prompt[:500],
                     raw_response=e.raw_response,
                     status="validation_error",
                     error_message=str(e),
@@ -144,7 +142,7 @@ class ExtractionPipeline:
                 self.audit_logger.log_extraction(
                     document_name=doc_name,
                     document_type=doc_type,
-                    prompt=prompt,
+                    prompt=prompt[:500],
                     status="llm_error",
                     error_message=str(e),
                     attempt_number=attempt,
@@ -182,29 +180,33 @@ class ExtractionPipeline:
             na_data = None
             ld_data = None
 
-            # Step 2: Extract NA Order
+            # Step 2: Extract NA Order (send PDF directly)
             if pair["na_order_path"]:
                 logger.info(f"Extracting NA Order: {pair['na_order_filename']}")
                 try:
-                    na_text = extract_text_from_pdf(pair["na_order_path"])
                     na_data = self._extract_with_retry(
-                        na_text, "na_order", pair["na_order_filename"]
+                        pair["na_order_path"], "na_order", pair["na_order_filename"]
                     )
                 except Exception as e:
-                    logger.error(f"Failed to read {pair['na_order_filename']}: {e}")
+                    logger.error(f"Failed to process {pair['na_order_filename']}: {e}")
             else:
                 logger.warning(f"No NA Order found for Survey No. {survey_no}")
 
-            # Step 3: Extract Lease Deed
+            # Rate limit: pause between LLM calls for free tier (skip in demo mode)
+            from compliance_clerk.llm.demo_responses import DemoLLMClient
+            if pair["lease_deed_path"] and not isinstance(self.llm_client, DemoLLMClient):
+                logger.info("Pausing 60s between LLM calls (free tier rate limit)...")
+                time.sleep(60)
+
+            # Step 3: Extract Lease Deed (send PDF directly)
             if pair["lease_deed_path"]:
                 logger.info(f"Extracting Lease Deed: {pair['lease_deed_filename']}")
                 try:
-                    ld_text = extract_text_from_pdf(pair["lease_deed_path"])
                     ld_data = self._extract_with_retry(
-                        ld_text, "lease_deed", pair["lease_deed_filename"]
+                        pair["lease_deed_path"], "lease_deed", pair["lease_deed_filename"]
                     )
                 except Exception as e:
-                    logger.error(f"Failed to read {pair['lease_deed_filename']}: {e}")
+                    logger.error(f"Failed to process {pair['lease_deed_filename']}: {e}")
             else:
                 logger.warning(f"No Lease Deed found for Survey No. {survey_no}")
 

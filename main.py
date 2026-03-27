@@ -67,6 +67,11 @@ def parse_args():
         default=None,
         help="Export audit logs to JSONL file after processing",
     )
+    parser.add_argument(
+        "--demo",
+        action="store_true",
+        help="Run in demo mode using cached responses (no API key needed)",
+    )
 
     return parser.parse_args()
 
@@ -79,16 +84,25 @@ def main():
     logger = logging.getLogger("compliance_clerk")
     logger.info("🏛️  The Compliance Clerk - Starting extraction pipeline")
 
-    # Validate configuration
-    try:
-        validate_config()
-    except ValueError as e:
-        logger.error(f"Configuration error: {e}")
-        sys.exit(1)
+    # Validate configuration (skip in demo mode)
+    if not args.demo:
+        try:
+            validate_config()
+        except ValueError as e:
+            logger.error(f"Configuration error: {e}")
+            sys.exit(1)
 
     # Initialize and run the pipeline
     try:
-        pipeline = ExtractionPipeline(input_dir=args.input_dir)
+        if args.demo:
+            from compliance_clerk.llm.demo_responses import DemoLLMClient
+            logger.info("🔄 Running in DEMO mode (cached responses, no API calls)")
+            pipeline = ExtractionPipeline(
+                input_dir=args.input_dir,
+                llm_client=DemoLLMClient(),
+            )
+        else:
+            pipeline = ExtractionPipeline(input_dir=args.input_dir)
         rows = pipeline.run()
     except Exception as e:
         logger.error(f"Pipeline error: {e}")

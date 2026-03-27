@@ -27,10 +27,10 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 # LLM Configuration (Google Gemini)
 # ──────────────────────────────────────────────
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-LLM_MODEL_NAME = "gemini-2.0-flash"
+LLM_MODEL_NAME = "gemini-2.5-flash"
 LLM_TEMPERATURE = 0.1  # Low temperature for deterministic extraction
 LLM_MAX_RETRIES = 3    # Retry attempts on failure
-LLM_RETRY_DELAY = 2    # Base delay in seconds (exponential backoff)
+LLM_RETRY_DELAY = 45   # Base delay in seconds (handles per-minute rate limits)
 
 # ──────────────────────────────────────────────
 # Audit Trail Configuration

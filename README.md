@@ -2,6 +2,8 @@
 
 > LLM-powered document extraction pipeline for NA Permission Orders & Lease Deeds
 
+**[Live Demo →](https://navspark-9pqpt4rubcfu59th9mxxwj.streamlit.app/)**
+
 ## Overview
 
 A Python pipeline that uses **Google Gemini's multimodal API** to extract structured data from government PDF documents — including scanned/image-based PDFs — and consolidates them into a standardized Excel report.

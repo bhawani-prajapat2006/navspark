@@ -52,12 +52,16 @@ class ExtractionPipeline:
         input_dir: Optional[str | Path] = None,
         llm_client: Optional[LLMClient] = None,
         audit_logger: Optional[AuditLogger] = None,
+        incremental: bool = False,
     ):
         self.input_dir = Path(input_dir or INPUT_DIR)
         self.llm_client = llm_client or LLMClient()
         self.audit_logger = audit_logger or AuditLogger()
+        self.incremental = incremental
 
         logger.info(f"Pipeline initialized. Input dir: {self.input_dir}")
+        if self.incremental:
+            logger.info("Incremental mode ON — will skip already-processed documents")
 
     def _extract_with_retry(
         self,
@@ -171,6 +175,12 @@ class ExtractionPipeline:
             logger.warning("No document pairs found in input directory")
             return []
 
+        # Incremental mode: get already-processed documents
+        processed_docs = set()
+        if self.incremental:
+            processed_docs = self.audit_logger.get_processed_documents()
+            logger.info(f"Incremental mode: {len(processed_docs)} documents already processed")
+
         consolidated_rows = []
 
         for idx, pair in enumerate(pairs, start=1):
@@ -180,33 +190,44 @@ class ExtractionPipeline:
             na_data = None
             ld_data = None
 
-            # Step 2: Extract NA Order (send PDF directly)
+            # Step 2: Extract NA Order
+            na_filename = pair.get("na_order_filename", "")
             if pair["na_order_path"]:
-                logger.info(f"Extracting NA Order: {pair['na_order_filename']}")
-                try:
-                    na_data = self._extract_with_retry(
-                        pair["na_order_path"], "na_order", pair["na_order_filename"]
-                    )
-                except Exception as e:
-                    logger.error(f"Failed to process {pair['na_order_filename']}: {e}")
+                if self.incremental and na_filename in processed_docs:
+                    na_data = self.audit_logger.get_cached_results(na_filename, "na_order")
+                    logger.info(f"⏩ Skipping NA Order (cached): {na_filename}")
+                else:
+                    logger.info(f"Extracting NA Order: {na_filename}")
+                    try:
+                        na_data = self._extract_with_retry(
+                            pair["na_order_path"], "na_order", na_filename
+                        )
+                    except Exception as e:
+                        logger.error(f"Failed to process {na_filename}: {e}")
             else:
                 logger.warning(f"No NA Order found for Survey No. {survey_no}")
 
-            # Rate limit: pause between LLM calls for free tier (skip in demo mode)
+            # Rate limit: pause between LLM calls for free tier (skip in demo/incremental-cached mode)
             from compliance_clerk.llm.demo_responses import DemoLLMClient
-            if pair["lease_deed_path"] and not isinstance(self.llm_client, DemoLLMClient):
+            ld_filename = pair.get("lease_deed_filename", "")
+            needs_ld_extraction = pair["lease_deed_path"] and not (self.incremental and ld_filename in processed_docs)
+            if needs_ld_extraction and not isinstance(self.llm_client, DemoLLMClient):
                 logger.info("Pausing 60s between LLM calls (free tier rate limit)...")
                 time.sleep(60)
 
-            # Step 3: Extract Lease Deed (send PDF directly)
+            # Step 3: Extract Lease Deed
             if pair["lease_deed_path"]:
-                logger.info(f"Extracting Lease Deed: {pair['lease_deed_filename']}")
-                try:
-                    ld_data = self._extract_with_retry(
-                        pair["lease_deed_path"], "lease_deed", pair["lease_deed_filename"]
-                    )
-                except Exception as e:
-                    logger.error(f"Failed to process {pair['lease_deed_filename']}: {e}")
+                if self.incremental and ld_filename in processed_docs:
+                    ld_data = self.audit_logger.get_cached_results(ld_filename, "lease_deed")
+                    logger.info(f"⏩ Skipping Lease Deed (cached): {ld_filename}")
+                else:
+                    logger.info(f"Extracting Lease Deed: {ld_filename}")
+                    try:
+                        ld_data = self._extract_with_retry(
+                            pair["lease_deed_path"], "lease_deed", ld_filename
+                        )
+                    except Exception as e:
+                        logger.error(f"Failed to process {ld_filename}: {e}")
             else:
                 logger.warning(f"No Lease Deed found for Survey No. {survey_no}")
 

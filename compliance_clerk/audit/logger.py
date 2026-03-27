@@ -169,6 +169,43 @@ class AuditLogger:
             "failed": errors,
         }
 
+    def get_processed_documents(self) -> set:
+        """
+        Get the set of document names that have been successfully processed.
+        Used by incremental mode to skip already-extracted documents.
+
+        Returns:
+            Set of document filenames with successful extractions.
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute(
+                "SELECT DISTINCT document_name FROM audit_logs WHERE status = 'success'"
+            )
+            return {row[0] for row in cursor.fetchall()}
+
+    def get_cached_results(self, document_name: str, document_type: str) -> Optional[dict]:
+        """
+        Retrieve the most recent successful extraction result for a document.
+
+        Args:
+            document_name: Name of the PDF file.
+            document_type: Type (na_order, lease_deed, echallan).
+
+        Returns:
+            Parsed JSON dict if found, None otherwise.
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute(
+                """SELECT parsed_json FROM audit_logs
+                   WHERE document_name = ? AND document_type = ? AND status = 'success'
+                   ORDER BY id DESC LIMIT 1""",
+                (document_name, document_type),
+            )
+            row = cursor.fetchone()
+            if row and row[0]:
+                return json.loads(row[0])
+        return None
+
     def export_to_jsonl(self, output_path: str | Path) -> int:
         """
         Export all audit logs to a JSONL file.

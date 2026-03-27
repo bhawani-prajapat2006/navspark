@@ -23,6 +23,7 @@ graph LR
 
 - **Multimodal PDF Extraction** — Sends PDFs directly to Gemini's vision API (handles scanned & text-based PDFs)
 - **Schema Enforcement** — Pydantic models validate every LLM response
+- **Incremental Processing** — Only processes new PDFs, reuses cached results (`--incremental`)
 - **Rate-Limit Resilient** — Smart retry logic with server-specified delays for free tier
 - **Audit Trail** — All LLM interactions logged to SQLite
 - **Demo Mode** — Offline testing with cached responses (`--demo`)
@@ -69,6 +70,9 @@ python main.py --input-dir data/input/ --output-file data/output/output.xlsx
 ```bash
 # Full pipeline with Gemini API
 python main.py --input-dir data/input/ --output-file data/output/output.xlsx
+
+# Incremental mode (skip already-processed PDFs, only extract new ones)
+python main.py --input-dir data/input/ --output-file data/output/output.xlsx --incremental
 
 # Demo mode (no API key needed — uses cached responses)
 python main.py --input-dir data/input/ --output-file data/output/output.xlsx --demo

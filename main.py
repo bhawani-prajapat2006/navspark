@@ -72,6 +72,11 @@ def parse_args():
         action="store_true",
         help="Run in demo mode using cached responses (no API key needed)",
     )
+    parser.add_argument(
+        "--incremental",
+        action="store_true",
+        help="Skip already-processed PDFs and reuse cached results from audit DB",
+    )
 
     return parser.parse_args()
 
@@ -100,9 +105,13 @@ def main():
             pipeline = ExtractionPipeline(
                 input_dir=args.input_dir,
                 llm_client=DemoLLMClient(),
+                incremental=args.incremental,
             )
         else:
-            pipeline = ExtractionPipeline(input_dir=args.input_dir)
+            pipeline = ExtractionPipeline(
+                input_dir=args.input_dir,
+                incremental=args.incremental,
+            )
         rows = pipeline.run()
     except Exception as e:
         logger.error(f"Pipeline error: {e}")

@@ -65,6 +65,18 @@ cp .env.example .env
 python main.py --input-dir data/input/ --output-file data/output/output.xlsx
 ```
 
+## 🌐 Web UI (Streamlit)
+
+```bash
+streamlit run app.py
+```
+
+Opens a browser with:
+- 📤 Drag-and-drop PDF upload
+- ⚙️ API/Demo mode toggle + incremental processing
+- 📊 Live results table with area mismatch detection
+- 📥 One-click Excel download
+
 ## Usage
 
 ```bash
